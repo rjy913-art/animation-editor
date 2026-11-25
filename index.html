@@ -811,6 +811,38 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
         else { frames.splice(currentFrameIdx + 1, 0, newFrameLayers); currentFrameIdx++; }
         clearHistory(); updateWorkspace(); updateTimelineUI(); saveHistorySnapshot();
     }
+function dataURLtoBlob(dataurl) {
+    const arr = dataurl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'image/gif';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) { u8arr[n] = bstr.charCodeAt(n); }
+    return new Blob([u8arr], { type: mime });
+}
+
+// 공통 저장 함수: Web Share API(파일 앱에 저장 가능) 우선, 실패 시 Blob 다운로드로 대체.
+// ※ 반드시 사용자가 직접 탭한 이벤트 핸들러 안에서 "바로" 호출해야 합니다 (await 전에 다른 비동기 처리가 끼면 안 됨).
+async function saveBlobToDevice(blob, filename) {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+            await navigator.share({ files: [file] });
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return; // 사용자가 공유창에서 취소함
+            // 공유 실패 시 아래 fallback으로 계속 진행
+        }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 
     function selectFrame(idx) {
         if(idx < 0 || idx >= frames.length) return;
@@ -1055,39 +1087,59 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
             alert('📂 프로젝트를 불러왔습니다.');
         });
     }
+function saveGif() {
+    if (frames.length === 0) return alert('저장할 프레임이 없습니다.');
+    finalizeSelection();
+    let fileName = prompt("저장할 파일 이름을 입력하세요:", "나의_애니메이션");
+    if (!fileName) return;
+    const btn = document.getElementById('btn-save-gif');
+    const originalText = btn.innerText;
+    const originalBg = btn.style.background;
+    btn.innerText = '⏳ 처리 중... 화면을 닫지 마세요';
+    btn.style.background = '#ff9800';
+    btn.disabled = true;
 
-    function saveGif() {
-        if(frames.length === 0) return alert('저장할 프레임이 없습니다.');
-        finalizeSelection();
-        let fileName = prompt("저장할 파일 이름을 입력하세요:", "나의_애니메이션");
-        if (!fileName) return;
-        const btn = document.getElementById('btn-save-gif'); const originalText = btn.innerText;
-        btn.innerText = '⏳ 처리 중... 화면을 닫지 마세요'; btn.style.background = '#ff9800'; btn.disabled = true;
+    const exportWidth = 854; const exportHeight = 480;
+    const images = [];
+    const tempCvs = document.createElement('canvas'); tempCvs.width = exportWidth; tempCvs.height = exportHeight;
+    const tCtx = tempCvs.getContext('2d');
 
-        const exportWidth = 854; const exportHeight = 480;
-        const images = [];
-        const tempCvs = document.createElement('canvas'); tempCvs.width = exportWidth; tempCvs.height = exportHeight;
-        const tCtx = tempCvs.getContext('2d');
-
-        for (let playIdx = 0; playIdx < frames.length; playIdx++) {
-            tCtx.fillStyle = '#ffffff'; tCtx.fillRect(0, 0, exportWidth, exportHeight);
-            globalLayers.forEach((layer, i) => {
-                if (layer.visible) tCtx.drawImage(frames[playIdx][i], 0, 0, CANVAS_W, CANVAS_H, 0, 0, exportWidth, exportHeight);
-            });
-            images.push(tempCvs.toDataURL('image/png'));
-        }
-
-        gifshot.createGIF({
-            images: images, gifWidth: exportWidth, gifHeight: exportHeight, interval: FRAME_DUR / 1000, numWorkers: 2
-        }, function(obj) {
-            if(!obj.error) {
-                const a = document.createElement('a'); a.href = obj.image; a.download = `${fileName}.gif`; a.click();
-                alert("🎉 GIF 애니메이션이 성공적으로 다운로드 되었습니다!");
-            } else { alert('GIF 생성 중 오류가 발생했습니다.'); }
-            btn.innerText = originalText; btn.style.background = '#E91E63'; btn.disabled = false;
+    for (let playIdx = 0; playIdx < frames.length; playIdx++) {
+        tCtx.fillStyle = '#ffffff'; tCtx.fillRect(0, 0, exportWidth, exportHeight);
+        globalLayers.forEach((layer, i) => {
+            if (layer.visible) tCtx.drawImage(frames[playIdx][i], 0, 0, CANVAS_W, CANVAS_H, 0, 0, exportWidth, exportHeight);
         });
+        images.push(tempCvs.toDataURL('image/png'));
     }
 
+    gifshot.createGIF({
+        images: images, gifWidth: exportWidth, gifHeight: exportHeight, interval: FRAME_DUR / 1000, numWorkers: 2
+    }, function(obj) {
+        if (obj.error) {
+            alert('GIF 생성 중 오류가 발생했습니다.');
+            btn.innerText = originalText; btn.style.background = originalBg; btn.disabled = false;
+            return;
+        }
+
+        // [수정] iOS Safari는 "지금 막 탭한 순간"에만 다운로드/공유를 허용합니다.
+        // GIF 인코딩은 비동기라 이미 그 순간이 지나버렸으므로, 버튼을 바꿔서
+        // 사용자가 한 번 더 탭하는 그 즉시 저장을 실행합니다.
+        const gifBlob = dataURLtoBlob(obj.image);
+        btn.innerText = '📥 탭해서 GIF 저장하기';
+        btn.style.background = '#4CAF50';
+        btn.disabled = false;
+
+        const confirmSave = async () => {
+            await saveBlobToDevice(gifBlob, `${fileName}.gif`);
+            btn.innerText = originalText;
+            btn.style.background = originalBg;
+            btn.onclick = saveGif; // 원래 기능으로 복구
+        };
+        btn.onclick = confirmSave;
+    });
+}
+
+    
     window.onload = init;
 
 </script>
