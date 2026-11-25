@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>아이패드용 애니메이션 웹 에디터 (완성본 v4)</title>
+<title>아이패드용 애니메이션 웹 에디터 (완성본 v5)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gifshot/0.3.2/gifshot.min.js"></script>
 <style>
     body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; background: #2c2c2c; color: white; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none; }
@@ -30,7 +30,7 @@
     .layer-mini-btn.del:hover { background: #e53935; }
 
     .canvas-container { flex: 1; position: relative; overflow: hidden; background: #1a1a1a; display: flex; justify-content: center; align-items: center; }
-    .canvas-wrapper { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); transform-origin: top left; }
+    .canvas-wrapper { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); transform-origin: center center; }
     .canvas-bg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: #ffffff; z-index: 0; pointer-events: none; }
 
     canvas { position: absolute; top: 0; left: 0; }
@@ -176,6 +176,7 @@
     let eraserCursorEl;
 
     let zoomLevel = 1.0;
+    let baseFitScale = 1.0; // 화면 크기에 맞춰 자동 계산되는 기본 맞춤 배율
     let isPanning = false;
     let panStartX, panStartY, translateX = 0, translateY = 0;
 
@@ -211,9 +212,14 @@
         canvasWrapper.style.width = CANVAS_W + 'px'; canvasWrapper.style.height = CANVAS_H + 'px';
 
         updateColorHistoryUI();
+        fitToContainer();
         updateTransform(); addFrame(); updateLayerUI();
         bindUIEvents(); bindCanvasEvents();
         updateCursorStyle();
+
+        // [수정 ①②] 화면 크기가 바뀔 때마다(아이패드 회전 포함) 캔버스를 다시 중앙에 맞춤
+        window.addEventListener('resize', fitToContainer);
+        window.addEventListener('orientationchange', () => setTimeout(fitToContainer, 300));
 
         window.addEventListener('keydown', e => {
             if(e.code === 'Space' && currentMode !== 'lasso') {
@@ -231,6 +237,22 @@
                 isPanning = false; document.getElementById('canvas-container').style.cursor = 'default';
             }
         });
+    }
+
+    // [수정 ①②] 캔버스 컨테이너 크기에 맞춰 캔버스를 자동으로 축소/확대하고
+    // translate를 0으로 리셋해서 항상 정중앙에 오도록 함.
+    // 화면에 "보이는" 크기와 터치 좌표 계산 기준(getPointerPos의 rect)이 항상 일치하게 되어
+    // 종이 영역 바깥까지 터치가 인식되는 문제도 함께 해결됨.
+    function fitToContainer() {
+        const container = document.getElementById('canvas-container');
+        const availW = container.clientWidth - 20;
+        const availH = container.clientHeight - 20;
+        const scale = Math.min(availW / CANVAS_W, availH / CANVAS_H, 1);
+        baseFitScale = scale > 0 ? scale : 1;
+        zoomLevel = baseFitScale;
+        translateX = 0; translateY = 0;
+        updateTransform();
+        updateEraserCursorSize();
     }
 
     function updateTransform() {
@@ -411,7 +433,11 @@
             selectionX = pos.x - dragStartX; selectionY = pos.y - dragStartY; drawSelectionFrame();
         } else if (isDrawing) {
             const targetCtx = frames[currentFrameIdx][currentLayerIdx].getContext('2d');
-            drawLine(targetCtx, e, lastX, lastY, pos.x, pos.y); lastX = pos.x; lastY = pos.y; updateWorkspace();
+            drawLine(targetCtx, e, lastX, lastY, pos.x, pos.y); lastX = pos.x; lastY = pos.y;
+            // [수정 ③] 그리는 동안에는 updateWorkspace()를 호출하지 않음.
+            // 기존에는 손가락이 움직일 때마다 모든 프레임 썸네일을 toDataURL()로 재생성해서
+            // 프레임이 늘어날수록(약 8개 이상) 아이패드가 멈추는 원인이었음.
+            // 실제 그림은 이미 targetCtx(캔버스)에 바로 그려지므로 다시 그릴 필요가 없음.
         }
     }
 
@@ -420,7 +446,12 @@
         if (isRotatingSelection) { isRotatingSelection = false; bakeSelectionRotation(); drawSelectionFrame(); saveHistorySnapshot(); }
         else if (isLassoSelecting) { isLassoSelecting = false; finishLasso(); }
         else if (isDraggingSelection) { isDraggingSelection = false; }
-        else if (isDrawing) { isDrawing = false; saveHistorySnapshot(); }
+        else if (isDrawing) {
+            isDrawing = false;
+            // [수정 ③] 펜을 뗀 순간에만 썸네일/타임라인을 1회 갱신.
+            updateWorkspace();
+            saveHistorySnapshot();
+        }
     }
 
     function getPressureSetting(e) {
@@ -504,7 +535,7 @@
         document.getElementById('btn-redo').onclick = redo;
         document.getElementById('btn-zoom-in').onclick = () => { zoomLevel += 0.2; updateTransform(); updateEraserCursorSize(); };
         document.getElementById('btn-zoom-out').onclick = () => { zoomLevel = Math.max(0.2, zoomLevel - 0.2); updateTransform(); updateEraserCursorSize(); };
-        document.getElementById('btn-zoom-reset').onclick = () => { zoomLevel = 1.0; translateX = 0; translateY = 0; updateTransform(); updateEraserCursorSize(); };
+        document.getElementById('btn-zoom-reset').onclick = () => { fitToContainer(); };
         document.getElementById('chk-onion').onchange = updateWorkspace;
         document.getElementById('btn-add-layer').onclick = addLayer;
         document.getElementById('btn-add-frame').onclick = () => addFrame(false);
