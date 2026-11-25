@@ -22,7 +22,7 @@
     .layer-panel { width: 220px; background: #1e1e1e; border-right: 1px solid #444; display: flex; flex-direction: column; }
     .layer-header { padding: 10px; border-bottom: 1px solid #333; font-weight: bold; background: #2a2a2a; display: flex; justify-content: space-between; align-items: center; }
     .layer-list { flex: 1; overflow-y: auto; padding: 5px; }
-    .layer-item { display: flex; align-items: center; padding: 8px; margin-bottom: 5px; background: #333; border-radius: 4px; cursor: pointer; }
+    .layer-item { user-select: none; -webkit-user-select: none;  display: flex; align-items: center; padding: 8px; margin-bottom: 5px; background: #333; border-radius: 4px; cursor: pointer; }
     .layer-item.active { border: 2px solid #4CAF50; background: #444; }
     .layer-item input[type="text"] { width: 70px; background: transparent; border: none; color: white; outline: none; margin-left: 5px; }
     .layer-mini-btn { background: #555; border: none; color: white; border-radius: 4px; padding: 3px 6px; font-size: 12px; cursor: pointer; margin-left: 4px; }
@@ -30,7 +30,7 @@
     .layer-mini-btn.del:hover { background: #e53935; }
 
     .canvas-container { flex: 1; position: relative; overflow: hidden; background: #1a1a1a; display: flex; justify-content: center; align-items: center; }
-    .canvas-wrapper { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); transform-origin: center center; }
+    .canvas-wrapper { max-width: none;  position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); transform-origin: center center; }
     .canvas-bg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: #ffffff; z-index: 0; pointer-events: none; }
 
     canvas { position: absolute; top: 0; left: 0; }
@@ -167,7 +167,7 @@
 
     let frames = [];
     let currentFrameIdx = 0;
-    let globalLayers = [ { id: 'layer-0', name: '배경 스케치', visible: true }, { id: 'layer-1', name: '캐릭터', visible: true } ];
+    let globalLayers = [ { id: 'layer-0', name: '배경', visible: true }, { id: 'layer-1', name: '캐릭터', visible: true } ];
     let currentLayerIdx = 1;
 
     let interactionCvs, iCtx;
@@ -217,9 +217,15 @@
         bindUIEvents(); bindCanvasEvents();
         updateCursorStyle();
 
-        // [수정 ①②] 화면 크기가 바뀔 때마다(아이패드 회전 포함) 캔버스를 다시 중앙에 맞춤
-        window.addEventListener('resize', fitToContainer);
-        window.addEventListener('orientationchange', () => setTimeout(fitToContainer, 300));
+        // [수정] 아이패드 Safari는 화면을 터치할 때마다(색채우기 등) 주소창이 접히면서
+        // window의 높이가 바뀌어 'resize' 이벤트가 발생합니다. 이 이벤트마다 캔버스를
+        // 다시 맞추면 "갑자기 확대되는" 현상이 생기므로, 일반 resize에는 반응하지 않고
+        // 화면 회전(orientationchange) 때만, 그리고 충분히 안정된 후에 1회만 재계산합니다.
+        let orientationFitTimer = null;
+        window.addEventListener('orientationchange', () => {
+            clearTimeout(orientationFitTimer);
+            orientationFitTimer = setTimeout(fitToContainer, 500);
+        });
 
         window.addEventListener('keydown', e => {
             if(e.code === 'Space' && currentMode !== 'lasso') {
@@ -829,15 +835,15 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
             div.className = 'layer-item' + (i === currentLayerIdx ? ' active' : '');
             const visChk = document.createElement('input'); visChk.type = 'checkbox'; visChk.checked = layer.visible;
             visChk.onclick = (e) => { e.stopPropagation(); layer.visible = visChk.checked; updateWorkspace(); };
-            const nameInput = document.createElement('input'); nameInput.type = 'text'; nameInput.value = layer.name;
-            nameInput.onchange = () => { layer.name = nameInput.value; }; nameInput.onclick = (e) => e.stopPropagation();
+            const nameSpan = document.createElement('span'); nameSpan.innerText = layer.name;
+            nameSpan.style.marginLeft = '8px'; nameSpan.style.flex = '1';
 
             const delBtn = document.createElement('button');
             delBtn.className = 'layer-mini-btn del'; delBtn.innerText = '🗑️'; delBtn.title = '이 레이어 삭제 (모든 프레임에서 삭제)';
             delBtn.disabled = globalLayers.length <= 1;
             delBtn.onclick = (e) => { e.stopPropagation(); deleteLayer(i); };
 
-            div.appendChild(visChk); div.appendChild(nameInput); div.appendChild(delBtn);
+            div.appendChild(visChk); div.appendChild(nameSpan); div.appendChild(delBtn);
             div.onclick = () => { finalizeSelection(); currentLayerIdx = i; updateLayerUI(); updateWorkspace(); };
             layerListDiv.appendChild(div);
         }
@@ -845,7 +851,7 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
 
     function addLayer() {
         finalizeSelection(); const newLayerIdx = globalLayers.length;
-        globalLayers.push({ id: `layer-${newLayerIdx}`, name: `레이어 ${newLayerIdx+1}`, visible: true });
+        globalLayers.push({ id: `layer-${newLayerIdx}`, name: `레이어 ${newLayerIdx + 1}`, visible: true });
         frames.forEach(frame => frame.push(createEmptyLayerCanvas()));
         currentLayerIdx = newLayerIdx; updateLayerUI(); updateWorkspace(); saveHistorySnapshot();
     }
@@ -932,9 +938,11 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
         oCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         playInterval = setInterval(() => {
             currentFrameIdx = (currentFrameIdx + 1) % frames.length;
-            layersContainer.innerHTML = '';
+            iCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+            iCtx.fillStyle = '#ffffff';
+            iCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
             frames[currentFrameIdx].forEach((cvs, idx) => {
-                if (globalLayers[idx].visible) { cvs.style.position = 'absolute'; cvs.style.top = '0'; cvs.style.left = '0'; layersContainer.appendChild(cvs); }
+                if (globalLayers[idx].visible) { iCtx.drawImage(cvs, 0, 0); }
             });
             document.querySelectorAll('.frame-thumb').forEach((el, i) => { if(i === currentFrameIdx) el.classList.add('active'); else el.classList.remove('active'); });
         }, FRAME_DUR);
@@ -942,7 +950,7 @@ function createEmptyLayerCanvas() { const c = document.createElement('canvas'); 
 
     function stopAnim() {
         isPlaying = false; clearInterval(playInterval);
-        document.getElementById('btn-play').style.display = 'inline-block'; document.getElementById('btn-stop').style.display = 'none';
+        document.getElementById('btn-play').style.display = 'inline-block'; document.getElementById('btn-stop').style.display = 'none'; iCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
         updateWorkspace();
     }
 
